@@ -27,7 +27,6 @@ VERSION = "0.1dev"
 
 setup(
      name = "mne_openbci",
-     version = VERSION,
      packages = find_packages(),
      install_requires = ['mne'],
      maintainer=MAINTAINER,
