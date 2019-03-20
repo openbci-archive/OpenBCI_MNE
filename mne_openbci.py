@@ -1,26 +1,22 @@
 """Conversion tool from OpenBCI to MNE Raw Class"""
 
-# Authors: Teon Brooks <teon.brooks@gmail.com>
+# Authors: Teon Brooks <teon.brooks@gmail.com>. Daniel Rivas <rivasdaniel1992@gmail.com>
 #
 # License: BSD (3-clause)
 
 import warnings
 np = None
-try:
-    import numpy as np
-except ImportError:
-    raise ImportError('Numpy is needed to use function.')
-mne = None
-try:
-    from mne.utils import verbose, logger
-    from mne.io.meas_info import create_info
-    from mne.io.base import _BaseRaw
-except ImportError:
-    raise ImportError('MNE is needed to use function.')
 
-class RawOpenBCI(_BaseRaw):
+import numpy as np
+
+from mne.utils import verbose, logger
+from mne.io.meas_info import create_info
+from mne.io.base import BaseRaw
+from mne.io.utils import _mult_cal_one
+
+
+class RawOpenBCI(BaseRaw):
     """Raw object from OpenBCI file
-
     Parameters
     ----------
     input_fname : str
@@ -34,7 +30,7 @@ class RawOpenBCI(_BaseRaw):
         EOG channels. Default is None.
     misc : list or tuple
         List of indices that should be designated MISC channels.
-        Default is (-3, -2, -1), which are the accelerator sensors.
+        Default is (-4, -3, -2, -1), which are the accelerator sensors followed by the timestamp column.
     stim_channel : int | None
         The channel index (starting at 0).
         If None (default), there will be no stim channel added.
@@ -53,18 +49,17 @@ class RawOpenBCI(_BaseRaw):
         If False, data are not read until save.
     verbose : bool, str, int, or None
         If not None, override default verbose level (see mne.verbose).
-
-
     See Also
     --------
     mne.io.Raw : Documentation of attribute and methods.
     """
     @verbose
     def __init__(self, input_fname, montage=None, eog=None,
-                 misc=(-3, -2, -1), stim_channel=None, scale=1e-6, sfreq=250,
+                 misc=(-4, -3, -2, -1), stim_channel=None, scale=1e-6, sfreq=250,
                  missing_tol=1, preload=True, verbose=None):
 
         bci_info = {'missing_tol': missing_tol, 'stim_channel': stim_channel}
+        openbci_channames = ["FP1", "FP2", "C3", "C4", "P7", "P8", "O1", "O2", "F7", "F8", "F3", "F4", "T7", "T8", "P3", "P4"]
         if not eog:
             eog = list()
         if not misc:
@@ -73,7 +68,11 @@ class RawOpenBCI(_BaseRaw):
 
         last_samps = [nsamps - 1]
         ch_names = ['EEG %03d' % num for num in range(1, nchan + 1)]
+        ch_names[:nchan-4] = openbci_channames[:nchan-4]
         ch_types = ['eeg'] * nchan
+
+        
+
         if misc:
             misc_names = ['MISC %03d' % ii for ii in range(1, len(misc) + 1)]
             misc_types = ['misc'] * len(misc)
@@ -90,8 +89,13 @@ class RawOpenBCI(_BaseRaw):
             ch_names[stim_channel] = 'STI 014'
             ch_types[stim_channel] = 'stim'
 
+        # mark last channel as the timestamp channel
+        ch_names[-1] = "Timestamps"
+        ch_types[-1] = "misc"
+
         # fix it for eog and misc marking
         info = create_info(ch_names, sfreq, ch_types, montage)
+        info["buffer_size_sec"] = 1.
         super(RawOpenBCI, self).__init__(info, last_samps=last_samps,
                                          raw_extras=[bci_info],
                                          filenames=[input_fname],
@@ -100,9 +104,9 @@ class RawOpenBCI(_BaseRaw):
         if preload:
             self.preload = preload
             logger.info('Reading raw data from %s...' % input_fname)
-            self._data, _ = self._read_segment()
+            self._data = self._read_segment()
 
-    def _read_segment_file(self, data, idx, offset, fi, start, stop,
+    def _read_segment_file(self, data, idx, fi, start, stop,
                            cals, mult):
         """Read a chunk of raw data"""
         input_fname = self._filenames[fi]
@@ -116,7 +120,6 @@ class RawOpenBCI(_BaseRaw):
         often but it poses a problem for maintaining proper sampling periods.
         OpenBCI data format combats this by providing a counter on the sample
         to know which ones are missing.
-
         Solution
         --------
         Interpolate the missing samples by resampling the surrounding samples.
@@ -132,7 +135,7 @@ class RawOpenBCI(_BaseRaw):
         # make diff one like others.
         missing_tol = self._raw_extras[fi]['missing_tol']
         diff = np.abs(np.diff(data_[:, 0]))
-        diff = np.mod(diff, 254) - 1
+        diff = np.mod(diff, 126) - 1
         missing_idx = np.where(diff != 0)[0]
         missing_samps = diff[missing_idx].astype(int)
 
@@ -144,7 +147,7 @@ class RawOpenBCI(_BaseRaw):
             insert_idx = list()
             for idx_, nn, ii in zip(missing_idx, missing_samps,
                                     missing_cumsum):
-                missing_data[ii:ii + nn] = np.mean(data_[(idx_, idx_ + 1), :])
+                missing_data[ii:ii + nn] = np.nanmean(data_[(idx_, idx_ + 1), :], axis=0)
                 if nn > missing_tol:
                     missing_data[ii:ii + nn] *= np.nan
                     warnings.warn('The number of missing samples exceeded the '
@@ -154,8 +157,7 @@ class RawOpenBCI(_BaseRaw):
             data_ = np.insert(data_, insert_idx, missing_data, axis=0)
         # data_ dimensions are samples by channels. transpose for MNE.
         data_ = data_[start:stop, 1:].T
-        data[:, offset:offset + stop - start] = \
-            np.dot(mult, data_[idx]) if mult is not None else data_[idx]
+        _mult_cal_one(data, data_, idx, cals, mult)
 
     def _get_data_dims(self, input_fname):
         """Briefly scan the data file for info"""
@@ -163,7 +165,7 @@ class RawOpenBCI(_BaseRaw):
         data = np.genfromtxt(input_fname, delimiter=',', comments='%',
                              skip_footer=1)
         diff = np.abs(np.diff(data[:, 0]))
-        diff = np.mod(diff, 254) - 1
+        diff = np.mod(diff, 127) - 1
         missing_idx = np.where(diff != 0)[0]
         missing_samps = diff[missing_idx].astype(int)
         nsamps, nchan = data.shape
@@ -176,11 +178,10 @@ class RawOpenBCI(_BaseRaw):
         return nsamps, nchan
 
 
-def read_raw_openbci(input_fname, montage=None, eog=None, misc=(-3, -2, -1),
-                     stim_channel=None, scale=1e-6, sfreq=250, missing_tol=1,
+def read_raw_openbci(input_fname, montage=None, eog=None, misc=(-4, -3, -2, -1),
+                     stim_channel=None, scale=1e-6, sfreq=250, missing_tol=2,
                      preload=True, verbose=None):
     """Raw object from OpenBCI file
-
     Parameters
     ----------
     input_fname : str
@@ -194,7 +195,7 @@ def read_raw_openbci(input_fname, montage=None, eog=None, misc=(-3, -2, -1),
         EOG channels. Default is None.
     misc : list or tuple
         List of indices that should be designated MISC channels.
-        Default is (-3, -2, -1), which are the accelerator sensors.
+        Default is (-4, -3, -2, -1), which are the accelerator sensors + timestamps.
     stim_channel : str | int | None
         The channel name or channel index (starting at 0).
         -1 corresponds to the last channel (default).
@@ -214,13 +215,10 @@ def read_raw_openbci(input_fname, montage=None, eog=None, misc=(-3, -2, -1),
         If False, data are not read until save.
     verbose : bool, str, int, or None
         If not None, override default verbose level (see mne.verbose).
-
     Returns
     -------
     raw : Instance of RawOpenBCI
         A Raw object containing OpenBCI data.
-
-
     See Also
     --------
     mne.io.Raw : Documentation of attribute and methods.
