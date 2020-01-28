@@ -16,9 +16,5 @@ BrainFlow and MNE both use [reticulate](https://rstudio.github.io/reticulate/) p
 
 [Example](./r/brainflow_to_mne.R)
 
-## OpenBCI GUI output file to MNE converter
-
-Converts output file of [OpenBCI GUI](https://github.com/OpenBCI/OpenBCI_GUI) to MNE.
-
 ## License
 MIT

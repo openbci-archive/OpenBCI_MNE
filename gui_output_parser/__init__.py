@@ -1,1 +1,0 @@
-from mne_openbci import read_raw_openbci
