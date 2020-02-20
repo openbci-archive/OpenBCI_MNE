@@ -13,6 +13,7 @@ board_shim$release_session ()
 
 eeg_channels <- brainflow_python$BoardShim$get_eeg_channels (brainflow_python$BoardIds$SYNTHETIC_BOARD$value)
 eeg_data <- np$array (data[eeg_channels,])
+eeg_data <- eeg_data / 1000000 # BrainFlow returns uV, convert to V for MNE
 
 # Creating MNE objects from brainflow data arrays
 ch_names = list ('T7', 'CP5', 'FC5', 'C3', 'C4', 'FC6', 'CP6', 'T8')
