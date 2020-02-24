@@ -1,0 +1,4 @@
+[submodule "cpp/mne-cpp"]
+	path = cpp/mne-cpp
+	url = https://github.com/mne-tools/mne-cpp
+	branch = master
